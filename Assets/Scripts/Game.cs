@@ -29,6 +29,12 @@ namespace AntTime
         Font uiFont;
         bool showHelp = true;
 
+        float autoSaveTimer = AutoSaveInterval;
+        const float AutoSaveInterval = 120f;   // วินาทีจริง
+        string toast = "";
+        float toastTimer;
+        float confirmNewWorldUntil;
+
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
         static void Boot()
         {
@@ -41,7 +47,10 @@ namespace AntTime
         {
             Application.targetFrameRate = 60;
             SetupCamera();
-            NewGame(Random.Range(1, 999999));
+
+            // มีเซฟอัตโนมัติค้างอยู่ก็เล่นต่อจากตรงนั้นเลย
+            if (!LoadFrom(SaveGame.AutoSlot, silentIfMissing: true))
+                NewGame(Random.Range(1, 999999));
             RecenterView();
         }
 
@@ -79,7 +88,59 @@ namespace AntTime
         {
             HandleInput();
             StepSimulation();
+            TickAutoSave();
+            if (toastTimer > 0f) toastTimer -= Time.deltaTime;
             render.Draw(Time.time);
+        }
+
+        void TickAutoSave()
+        {
+            autoSaveTimer -= Time.deltaTime;
+            if (autoSaveTimer > 0f) return;
+            autoSaveTimer = AutoSaveInterval;
+            if (SaveGame.Save(SaveGame.AutoSlot, world, colony)) Toast("บันทึกอัตโนมัติแล้ว");
+        }
+
+        void OnApplicationQuit()
+        {
+            SaveGame.Save(SaveGame.AutoSlot, world, colony);
+        }
+
+        void Toast(string message)
+        {
+            toast = message;
+            toastTimer = 2.5f;
+        }
+
+        // ---------- เซฟ / โหลด ----------
+
+        void SaveTo(string slot)
+        {
+            Toast(SaveGame.Save(slot, world, colony) ? "บันทึกเกมแล้ว" : "บันทึกไม่สำเร็จ (ดู Console)");
+        }
+
+        bool LoadFrom(string slot, bool silentIfMissing = false)
+        {
+            if (!SaveGame.Exists(slot))
+            {
+                if (!silentIfMissing) Toast("ยังไม่มีไฟล์เซฟ");
+                return false;
+            }
+
+            World loadedWorld;
+            Colony loadedColony;
+            if (!SaveGame.Load(slot, out loadedWorld, out loadedColony))
+            {
+                if (!silentIfMissing) Toast("โหลดไม่สำเร็จ (ดู Console)");
+                return false;   // เกมที่เล่นอยู่ไม่ถูกแตะ
+            }
+
+            world = loadedWorld;
+            colony = loadedColony;
+            render = new PixelRenderer(world, colony);
+            lastPaint = new Vector2Int(-1, -1);
+            if (!silentIfMissing) Toast("โหลดเกมแล้ว");
+            return true;
         }
 
         void StepSimulation()
@@ -117,7 +178,25 @@ namespace AntTime
 
             if (Input.GetKeyDown(KeyCode.C)) RecenterView();
             if (Input.GetKeyDown(KeyCode.H)) showHelp = !showHelp;
-            if (Input.GetKeyDown(KeyCode.R)) { NewGame(Random.Range(1, 999999)); RecenterView(); }
+            if (Input.GetKeyDown(KeyCode.F5)) SaveTo(SaveGame.ManualSlot);
+            if (Input.GetKeyDown(KeyCode.F9)) LoadFrom(SaveGame.ManualSlot);
+
+            // สร้างโลกใหม่ = ทิ้งรังที่เลี้ยงมา ต้องกดยืนยันอีกครั้ง
+            if (Input.GetKeyDown(KeyCode.R))
+            {
+                if (Time.time < confirmNewWorldUntil)
+                {
+                    confirmNewWorldUntil = 0f;
+                    NewGame(Random.Range(1, 999999));
+                    RecenterView();
+                    Toast("สร้างโลกใหม่แล้ว");
+                }
+                else
+                {
+                    confirmNewWorldUntil = Time.time + 3f;
+                    Toast("กด R อีกครั้งเพื่อทิ้งรังนี้และสร้างโลกใหม่");
+                }
+            }
 
             float wheel = Input.mouseScrollDelta.y;
             if (Mathf.Abs(wheel) > 0.01f)
@@ -236,7 +315,7 @@ namespace AntTime
             }
 
             GUI.color = new Color(0f, 0f, 0f, 0.55f);
-            GUI.DrawTexture(new Rect(8, 8, 300, showHelp ? 330 : 150), Texture2D.whiteTexture);
+            GUI.DrawTexture(new Rect(8, 8, 300, showHelp ? 350 : 150), Texture2D.whiteTexture);
             GUI.color = Color.white;
 
             var r = new Rect(18, 14, 290, 22);
@@ -249,6 +328,8 @@ namespace AntTime
             Line("งานขุดค้าง: " + colony.digJobs.Count + "     ดินที่ขนออก: " + colony.soilMoved);
             Line("<b>พู่กัน:</b> " + BrushName() + "   ขนาด " + brushSize);
 
+            DrawToast();
+
             if (!showHelp) return;
             r.y += 8;
             Line("<b>วิธีเล่น</b>  (กด H ซ่อน/แสดง)");
@@ -259,6 +340,21 @@ namespace AntTime
             Line("ลากเมาส์ขวา / WASD = เลื่อนจอ, ล้อ = ซูม");
             Line("Space หยุด/เล่น   , . ปรับความเร็ว");
             Line("C กลับไปที่รัง   R สร้างโลกใหม่");
+            Line("F5 บันทึก   F9 โหลด (บันทึกอัตโนมัติทุก 2 นาที)");
+        }
+
+        void DrawToast()
+        {
+            if (toastTimer <= 0f || string.IsNullOrEmpty(toast)) return;
+
+            var size = hudStyle.CalcSize(new GUIContent(toast));
+            var box = new Rect(Screen.width * 0.5f - size.x * 0.5f - 12f, Screen.height - 70f, size.x + 24f, 30f);
+
+            GUI.color = new Color(0f, 0f, 0f, 0.6f * Mathf.Clamp01(toastTimer));
+            GUI.DrawTexture(box, Texture2D.whiteTexture);
+            GUI.color = new Color(1f, 1f, 1f, Mathf.Clamp01(toastTimer));
+            GUI.Label(new Rect(box.x + 12f, box.y + 5f, size.x + 4f, 22f), toast, hudStyle);
+            GUI.color = Color.white;
         }
 
         string BrushName()

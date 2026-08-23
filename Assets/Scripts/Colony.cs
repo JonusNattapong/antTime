@@ -56,10 +56,15 @@ namespace AntTime
 
         public Ant Queen;
 
-        public Colony(World w)
+        public Colony(World w) : this(w, true) { }
+
+        // startNewNest = false ใช้ตอนโหลดเซฟ (โลกกับมดมาจากไฟล์ ไม่ต้องขุดรังใหม่)
+        public Colony(World w, bool startNewNest)
         {
             world = w;
             pf = new Pathfinder(w);
+            if (!startNewNest) { RefreshCaches(); return; }
+
             world.CarveStarterNest();
             RefreshCaches();
 
@@ -849,6 +854,99 @@ namespace AntTime
                 world.marks[i] = m;
                 if (!digJobs.Contains(i)) digJobs.Add(i);
             }
+        }
+
+        // ---------- เซฟ / โหลด ----------
+
+        public void Write(System.IO.BinaryWriter w)
+        {
+            w.Write(simTime); w.Write(day);
+            w.Write(antsBorn); w.Write(antsDied);
+            w.Write(foodGathered); w.Write(soilMoved);
+            w.Write(nextAntId); w.Write(nextFoodId);
+            w.Write(foodSpawnTimer); w.Write(layTimer);
+
+            w.Write(ants.Count);
+            for (int i = 0; i < ants.Count; i++)
+            {
+                var a = ants[i];
+                w.Write(a.id); w.Write(a.tile);
+                w.Write((byte)a.role); w.Write((byte)a.carry);
+                w.Write(a.hunger); w.Write(a.age);
+            }
+
+            w.Write(broods.Count);
+            for (int i = 0; i < broods.Count; i++)
+            {
+                var b = broods[i];
+                w.Write(b.tile); w.Write((byte)b.stage); w.Write(b.timer); w.Write(b.fed);
+            }
+
+            w.Write(foods.Count);
+            for (int i = 0; i < foods.Count; i++)
+            {
+                var f = foods[i];
+                w.Write(f.id); w.Write(f.tile); w.Write(f.amount);
+            }
+        }
+
+        public void ReadState(System.IO.BinaryReader r)
+        {
+            simTime = r.ReadSingle(); day = r.ReadInt32();
+            antsBorn = r.ReadInt32(); antsDied = r.ReadInt32();
+            foodGathered = r.ReadInt32(); soilMoved = r.ReadInt32();
+            nextAntId = r.ReadInt32(); nextFoodId = r.ReadInt32();
+            foodSpawnTimer = r.ReadSingle(); layTimer = r.ReadSingle();
+
+            ants.Clear(); broods.Clear(); foods.Clear();
+            Queen = null;
+
+            // ไม่เซฟงานที่มดกำลังทำค้างอยู่ (เส้นทาง/การจอง) — โหลดมาแล้วให้ทุกตัวเริ่มหางานใหม่
+            // ง่ายกว่าและไม่มีทางที่ state จะขัดกับโลกที่โหลดมา
+            int antCount = r.ReadInt32();
+            for (int i = 0; i < antCount; i++)
+            {
+                var a = new Ant
+                {
+                    id = r.ReadInt32(),
+                    tile = r.ReadInt32(),
+                    role = (Role)r.ReadByte(),
+                    carry = (Carry)r.ReadByte(),
+                    hunger = r.ReadSingle(),
+                    age = r.ReadSingle(),
+                    state = AntState.Idle,
+                };
+                ants.Add(a);
+                if (a.role == Role.Queen && Queen == null) Queen = a;
+            }
+
+            int broodCount = r.ReadInt32();
+            for (int i = 0; i < broodCount; i++)
+            {
+                broods.Add(new Brood
+                {
+                    tile = r.ReadInt32(),
+                    stage = (BroodStage)r.ReadByte(),
+                    timer = r.ReadSingle(),
+                    fed = r.ReadInt32(),
+                });
+            }
+
+            int foodCount = r.ReadInt32();
+            for (int i = 0; i < foodCount; i++)
+            {
+                foods.Add(new FoodItem
+                {
+                    id = r.ReadInt32(),
+                    tile = r.ReadInt32(),
+                    amount = r.ReadInt32(),
+                });
+            }
+
+            RefreshCaches();
+
+            // เซฟเสียหายจนไม่มีราชินี ก็ตั้งตัวใหม่ให้ ไม่งั้นเกมจะพังทันที
+            if (Queen == null) SpawnQueen();
         }
 
         public int LarvaCount()

@@ -21,7 +21,13 @@ namespace AntTime
         public int NestY;      // ความลึกของห้องราชินีเริ่มต้น
         public int Version;    // เพิ่มขึ้นทุกครั้งที่ terrain เปลี่ยน (ให้ pathfinder รู้)
 
-        public World(int w, int h, int seed)
+        public World(int w, int h, int seed) : this(w, h)
+        {
+            Generate(seed);
+        }
+
+        // สร้างโลกเปล่า ๆ ไม่สุ่มภูมิประเทศ — ใช้ตอนโหลดเซฟ
+        public World(int w, int h)
         {
             W = w; H = h;
             tiles = new Tile[w * h];
@@ -30,7 +36,6 @@ namespace AntTime
             decor = new byte[w * h];
             stored = new byte[w * h];
             surfaceY = new int[w];
-            Generate(seed);
         }
 
         public int Idx(int x, int y) => y * W + x;
@@ -170,6 +175,48 @@ namespace AntTime
                     if (Get(x, y) == Tile.Stone) continue;
                     Set(x, y, t);
                 }
+        }
+
+        public void RecomputeAllSurfaces()
+        {
+            for (int x = 0; x < W; x++) RecomputeSurface(x);
+        }
+
+        // ---------- เซฟ / โหลด ----------
+
+        public void Write(System.IO.BinaryWriter w)
+        {
+            w.Write(W); w.Write(H); w.Write(NestX); w.Write(NestY);
+
+            int n = W * H;
+            var buf = new byte[n];
+            for (int i = 0; i < n; i++) buf[i] = (byte)tiles[i];
+            w.Write(buf);
+            for (int i = 0; i < n; i++) buf[i] = (byte)marks[i];
+            w.Write(buf);
+            w.Write(noise);
+            w.Write(decor);
+            w.Write(stored);
+        }
+
+        public static World Read(System.IO.BinaryReader r)
+        {
+            int w = r.ReadInt32(), h = r.ReadInt32();
+            var world = new World(w, h);
+            world.NestX = r.ReadInt32();
+            world.NestY = r.ReadInt32();
+
+            int n = w * h;
+            var buf = r.ReadBytes(n);
+            for (int i = 0; i < n; i++) world.tiles[i] = (Tile)buf[i];
+            buf = r.ReadBytes(n);
+            for (int i = 0; i < n; i++) world.marks[i] = (Mark)buf[i];
+            System.Array.Copy(r.ReadBytes(n), world.noise, n);
+            System.Array.Copy(r.ReadBytes(n), world.decor, n);
+            System.Array.Copy(r.ReadBytes(n), world.stored, n);
+
+            world.RecomputeAllSurfaces();
+            return world;
         }
 
         public int TotalStoredFood()
